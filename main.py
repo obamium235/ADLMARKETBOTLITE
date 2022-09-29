@@ -89,10 +89,16 @@ def check_trade():
             print('wut?')
 
 def session_ok():
-    if steam_client.is_session_alive():
-        print(colorama.Fore.GREEN + '[Info]Steam Session Online!')
+    try:
+        is_alive = steam_client.is_session_alive()
+    except Exception as e:
+        print(colorama.Fore.RED + f"steam session check failed: {repr(e)}")
+        time.sleep(5)
+        session_ok()
     else:
-        if not steam_client.is_session_alive():
+        if is_alive:
+            print(colorama.Fore.GREEN + '[Info]Steam Session Online!')
+        else:
             print(colorama.Fore.RED + '[Info]Session expired relogin....!')
             log_in_steam()
 
