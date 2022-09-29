@@ -7,59 +7,61 @@ import colorama
 from steampy.client import SteamClient
 import authdata
 from steampy import guard
+import logging
 
 colorama.init()
+logging.basicConfig(level=logging.INFO, datefmt='%Y-%m-%d %H:%M:%S',format='[%(asctime)s] %(message)s')
+log = logging.getLogger('main')
 steam_client = SteamClient(authdata.api_key)
 
 def log_in_steam():
     # Shitty hack for cookie caching right here
     # imagine the smell, mmmmm
     if os.path.exists('./main.dat'):
-        print('cookie file exists')
         if os.path.isfile('./main.dat'):
-            print('cookie file surely exist and is file')
-            print('loading cookies...')
             try:
                 with open('./main.dat', "rb") as f:
                     steam_client._session.cookies._cookies = pickle.load(f)
+                log.info('loaded cookies from file')
             except Exception as e:
-                print('restoring cookies from file failed: '+repr(e))
+                log.warn('loading cookies from file failed: %s', repr(e))
     else:
-        print('cookie file not found')
+        log.info('cookie file not found, will create later')
 
     steam_client.was_login_executed = True
     steam_client.username = authdata.login
     steam_client._password = authdata.password
     steam_client.steam_guard = guard.load_steam_guard("guard.json")
     if steam_client.is_session_alive():
-        print('session is alive, no need to relogin')
+        log.info('session is alive, no need to relogin')
         return
     else:
-        print('no, session is kill, need to (re)login')
+        log.info('no, session is kill, need to (re)login')
         steam_client.was_login_executed = False
 
-    print('login in Steam...')
+    log.info('login in Steam...')
     try:
         steam_client.login(authdata.login, authdata.password, "guard.json")
     except Exception as e:
-        print(colorama.Fore.RED + f"fatal steam login error: {repr(e)}")
+        log.critical('fatal steam login error: %s', repr(e))
+        log.critical('quit...')
         exit(1)
     else:
-        print('logged into Steam, saving cookies...')
+        log.info('logged into Steam, saving cookies...')
         with open('./main.dat', "wb") as f:
             pickle.dump(steam_client._session.cookies._cookies, f)
 
 def check_trade():
-    print(colorama.Fore.BLUE + "[Info] Request has been sent to check trades on steam-trader")
+    log.info("checking if we have any trades on Steam-trader")
     try:
         res_trader = requests.get(f"https://api.steam-trader.com/exchange/?key={authdata.trader_api}")
     except Exception as e:
-        print(colorama.Fore.RED + f"steam-trader request failed: {repr(e)}")
+        log.error("Steam-trader request failed: %s", repr(e))
 
     try:
         res_trade_json = res_trader.json()
     except Exception as e:
-        print(colorama.Fore.RED + f"steam-trader response parsing failed: {repr(e)}")
+        log.error("Steam-trader response parsing failed: %s", repr(e))
     else:
         try_amount = 10
 
@@ -67,41 +69,42 @@ def check_trade():
         errcode_steamtrader = res_trade_json.get("code", "")
         errstr__steamtrader = res_trade_json.get("error", "")
         if success_steamtrader:
-            offer = (res_trade_json["offerId"])
+            offer = res_trade_json["offerId"]
+            log.info('got trade offer: %s', offer)
             trade_accepted = False
             while not trade_accepted:
                 try:
                     steam_client.accept_trade_offer(str(offer))
                     trade_accepted = True
-                    print(colorama.Fore.GREEN + f"[Trade] {str(offer)} Accepted")
-                except:
+                    log.info("tradeoffer %s accepted", offer)
+                except Exception as e:
+                    log.error("error accepting trade offer %s : %s", offer, repr(e))
                     if try_amount < 0:
-                        print(colorama.Fore.RED + f"[Trade] Can't accept trade {str(offer)},skipping")
+                        log.error("giving up on accepting trade offer %s", offer)
                         break
-                    print(colorama.Fore.RED + f"[Trade] Can't accept trade, trying one more time: {str(try_amount)}")
+                    log.error("retry to accept trade offer %s (attempt %s/%s)", offer, 10-try_amount, try_amount)
                     try_amount -= 1
                     time.sleep(10)
         elif success_steamtrader == False and errcode_steamtrader == 4:
-            print(colorama.Fore.GREEN + f"nothing to trade right now")
+            log.info("nothing to trade right now")
         elif success_steamtrader == False and errcode_steamtrader:
-            print(colorama.Fore.GREEN + f"steam-trader exchange error: {errstr__steamtrader} ({errcode_steamtrader})")
+            log.warn("Steam-trader exchange error: %s (%s)", errstr__steamtrader, errcode_steamtrader)
         else:
-            print('wut?')
+            log.warn('wut?')
 
 def session_ok():
     try:
         is_alive = steam_client.is_session_alive()
     except Exception as e:
-        print(colorama.Fore.RED + f"steam session check failed: {repr(e)}")
+        log.error("Steam session check failed: %s", repr(e))
         time.sleep(5)
         session_ok()
     else:
         if is_alive:
-            print(colorama.Fore.GREEN + '[Info]Steam Session Online!')
+            log.info('Steam session is OK, waiting for trades')
         else:
-            print(colorama.Fore.RED + '[Info]Session expired relogin....!')
+            log.info('Steam session expired, doing relogin')
             log_in_steam()
-
 
 def start_bot():
     check_trade()
@@ -113,5 +116,6 @@ def start_bot():
         schedule.run_pending()
         time.sleep(1)
 
+log.info('started')
 log_in_steam()
 start_bot()
