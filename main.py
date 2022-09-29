@@ -106,11 +106,103 @@ def session_ok():
             log.info('Steam session expired, doing relogin')
             log_in_steam()
 
+def ping_tm():
+    try:
+        tm_response = requests.get(f"https://tf2.tm/api/v2/ping?key={authdata.tm_api}")
+    except Exception as e:
+        log.error("tm ping request failed: %s", repr(e))
+
+    try:
+        tm_response_json = tm_response.json()
+    except Exception as e:
+        log.error("tm ping response parsing failed: %s", repr(e))
+    else:
+        success_tm = tm_response_json.get("success", "")
+        errstr__tm = tm_response_json.get("error", "") or tm_response_json.get("message", "")
+        if success_tm:
+            log.info('pinged tm')
+        else:
+            log.warn("tm ping error: %s", errstr__tm)
+
+def do_trade_tm(action):
+    if action == 'take' or action == 'give':
+        pass 
+    else:
+        log.error('wrong action')
+        return
+
+    try:
+        tm_response = requests.get(f"https://tf2.tm/api/v2/trade-request-{action}?key={authdata.tm_api}")
+    except Exception as e:
+        log.error("tm trade request failed: %s", repr(e))
+    try:
+        tm_response_json = tm_response.json()
+    except Exception as e:
+        log.error("tm trade response parsing failed: %s", repr(e))
+    else:
+        success_tm = tm_response_json.get("success", "")
+        errstr__tm = tm_response_json.get("error", "") or tm_response_json.get("message", "")
+        offer_id   = tm_response_json.get("trade", "")
+        if success_tm:
+            trade_accepted = False
+            while not trade_accepted:
+                try:
+                    steam_client.accept_trade_offer(offer_id)
+                    trade_accepted = True
+                    log.info("tradeoffer %s accepted", offer_id)
+                except Exception as e:
+                    log.error("error accepting trade offer %s : %s", offer_id, repr(e))
+                    if try_amount < 0:
+                        log.error("giving up on accepting trade offer %s", offer_id)
+                        break
+                    log.error("retry to accept trade offer %s (attempt %s/%s)", offer_id, 10-try_amount, try_amount)
+                    try_amount -= 1
+                    time.sleep(10)
+        else:
+            log.warn("tm trade request error: %s", errstr__tm)
+            if errstr__tm.find('Мы пытаемся') >= 0 or errstr__tm.find('error: invalid key ') >= 0 or errstr__tm.find('У вас уже есть активные предложения обмена.') >= 0:
+                time.sleep(5)
+                do_trade_tm(action)
+
+def check_trade_tm():
+    try:
+        tm_response = requests.get(f"https://tf2.tm/api/v2/items?key={authdata.tm_api}")
+    except Exception as e:
+        log.error("tm items request failed: %s", repr(e))
+    try:
+        tm_response_json = tm_response.json()
+    except Exception as e:
+        log.error("tm items response parsing failed: %s", repr(e))
+    else:
+        success_tm = tm_response_json.get("success", "")
+        errstr__tm = tm_response_json.get("error", "") or tm_response_json.get("message", "")
+        if success_tm:
+            do_trade_action = ''
+            for i in tm_response_json['items']:
+                if i['status'] == '2':
+                    do_trade_action = 'give'
+                    break
+                if i['status'] == '4':
+                    do_trade_action = 'take'
+                    break
+            if do_trade_action != '':
+                do_trade_tm(do_trade_action)
+            else:
+                log.info('nothing to trade on tm')
+        else:
+            log.warn("tm items error: %s", errstr__tm)
+
 def start_bot():
     check_trade()
+    time.sleep(1)
+    ping_tm()
+    time.sleep(1)
+    check_trade_tm()
 
     schedule.every(180).seconds.do(check_trade)
     schedule.every(30).minutes.do(session_ok)
+    schedule.every(185).seconds.do(ping_tm)
+    schedule.every(3).minutes.do(check_trade_tm)
 
     while True:
         schedule.run_pending()
