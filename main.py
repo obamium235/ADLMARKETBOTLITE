@@ -14,6 +14,10 @@ logging.basicConfig(level=logging.INFO, datefmt='%Y-%m-%d %H:%M:%S',format='[%(a
 log = logging.getLogger('main')
 steam_client = SteamClient(authdata.api_key)
 
+# i know, globals is bad, yeah
+is_have_trade_tm = False
+do_trade_action = ''
+
 def log_in_steam():
     # Shitty hack for cookie caching right here
     # imagine the smell, mmmmm
@@ -112,7 +116,9 @@ def ping_tm():
         tm_response = requests.get(f"https://tf2.tm/api/v2/ping?key={authdata.tm_api}")
     except Exception as e:
         log.error("tm ping request failed: %s", repr(e))
-
+    if tm_response.text.find('<html') >=0 and tm_response.text.find('Engineering works') >=0:
+        log.warn('tm error: Engineering works')
+        return
     try:
         tm_response_json = tm_response.json()
     except Exception as e:
@@ -125,17 +131,30 @@ def ping_tm():
         else:
             log.warn("tm ping error: %s", errstr__tm)
 
+def do_trade_tm_sched():
+    if is_have_trade_tm:
+        do_trade_tm(do_trade_action)
+
 def do_trade_tm(action):
+    global is_have_trade_tm
     if action == 'take' or action == 'give':
         pass 
     else:
         log.error('wrong action')
         return
 
+    if is_have_trade_tm:
+        pass
+    else:
+        return
+
     try:
         tm_response = requests.get(f"https://tf2.tm/api/v2/trade-request-{action}?key={authdata.tm_api}")
     except Exception as e:
         log.error("tm trade request failed: %s", repr(e))
+    if tm_response.text.find('<html') >=0 and tm_response.text.find('Engineering works') >=0:
+        log.warn('tm error: Engineering works')
+        return
     try:
         tm_response_json = tm_response.json()
     except Exception as e:
@@ -150,6 +169,7 @@ def do_trade_tm(action):
                 try:
                     steam_client.accept_trade_offer(offer_id)
                     trade_accepted = True
+                    is_have_trade_tm = False
                     log.info("tradeoffer %s accepted", offer_id)
                 except Exception as e:
                     log.error("error accepting trade offer %s : %s", offer_id, repr(e))
@@ -166,10 +186,18 @@ def do_trade_tm(action):
                 do_trade_tm(action)
 
 def check_trade_tm():
+    global is_have_trade_tm, do_trade_action
+    if is_have_trade_tm:
+        log.info('already know that we have items to trade')
+        return
+
     try:
         tm_response = requests.get(f"https://tf2.tm/api/v2/items?key={authdata.tm_api}")
     except Exception as e:
         log.error("tm items request failed: %s", repr(e))
+    if tm_response.text.find('<html') >=0 and tm_response.text.find('Engineering works') >=0:
+        log.warn('tm error: Engineering works')
+        return
     try:
         tm_response_json = tm_response.json()
     except Exception as e:
@@ -187,7 +215,7 @@ def check_trade_tm():
                     do_trade_action = 'take'
                     break
             if do_trade_action != '':
-                do_trade_tm(do_trade_action)
+                is_have_trade_tm = True
             else:
                 log.info('nothing to trade on tm')
         else:
@@ -204,6 +232,7 @@ def start_bot():
     schedule.every(30).minutes.do(session_ok)
     schedule.every(185).seconds.do(ping_tm)
     schedule.every(3).minutes.do(check_trade_tm)
+    schedule.every(2).seconds.do(do_trade_tm_sched)
 
     while True:
         schedule.run_pending()
