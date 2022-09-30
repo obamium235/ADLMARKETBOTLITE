@@ -87,10 +87,11 @@ def check_trade():
                     time.sleep(10)
         elif success_steamtrader == False and errcode_steamtrader == 4:
             log.info("nothing to trade right now")
-        elif success_steamtrader == False and errcode_steamtrader:
+        elif success_steamtrader == False:
             log.warn("Steam-trader exchange error: %s (%s)", errstr__steamtrader, errcode_steamtrader)
         else:
             log.warn('wut?')
+            print(res_trader.text)
 
 def session_ok():
     try:
