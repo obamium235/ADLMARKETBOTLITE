@@ -16,6 +16,9 @@ steam_client = SteamClient(authdata.api_key)
 
 # i know, globals is bad, yeah
 is_have_trade_tm = False
+is_updating_tm_inv = False
+is_checking_tm_inv = False
+tm_errors_count = 0
 do_trade_action = ''
 
 def log_in_steam():
@@ -113,7 +116,7 @@ def session_ok():
 
 def ping_tm():
     try:
-        tm_response = requests.get(f"https://tf2.tm/api/v2/ping?key={authdata.tm_api}")
+        tm_response = requests.get(f"https://tf2.tm/api/v2/ping/?key={authdata.tm_api}")
     except Exception as e:
         log.error("tm ping request failed: %s", repr(e))
     if tm_response.text.find('<html') >=0 and tm_response.text.find('Engineering works') >=0:
@@ -131,12 +134,58 @@ def ping_tm():
         else:
             log.warn("tm ping error: %s", errstr__tm)
 
+def do_update_tm_inv():
+    global is_updating_tm_inv, is_checking_tm_inv
+    if is_updating_tm_inv and not is_checking_tm_inv:
+        try:
+            tm_response = requests.get(f"https://tf2.tm/api/v2/update-inventory/?key={authdata.tm_api}")
+        except Exception as e:
+            log.error("tm update inv request failed: %s", repr(e))
+        if tm_response.text.find('<html') >=0 and tm_response.text.find('Engineering works') >=0:
+            log.warn('tm error: Engineering works')
+            return
+        try:
+            tm_response_json = tm_response.json()
+        except Exception as e:
+            log.error("tm update inv response parsing failed: %s", repr(e))
+        else:
+            is_checking_tm_inv = True
+    if is_updating_tm_inv and is_checking_tm_inv:
+        try:
+            tm_response = requests.get(f"https://tf2.tm/api/InventoryItems?key={authdata.tm_api}")
+        except Exception as e:
+            log.error("tm check site inv request failed: %s", repr(e))
+        if tm_response.text.find('<html') >=0 and tm_response.text.find('Engineering works') >=0:
+            log.warn('tm error: Engineering works')
+            return
+        try:
+            tm_response_json = tm_response.json()
+        except Exception as e:
+            log.error("tm check site inv response parsing failed: %s", repr(e))
+        else:
+            success_tm = tm_response_json.get("success", "")
+            errstr__tm = tm_response_json.get("error", "") or tm_response_json.get("message", "")
+            tm_updating_now = tm_response_json.get("updatingNow", False)
+            tm_items_in_cache = tm_response_json.get("itemsInCache", 0)
+            if success_tm:
+                if tm_updating_now == False and tm_items_in_cache > 0:
+                    log.info('tm site inventory updated successfully')
+                    is_updating_tm_inv = False
+                    is_checking_tm_inv = False
+                if tm_updating_now == False and tm_items_in_cache == 0:
+                    log.info('tm site inventory update finished with fail, will retry later')
+                    is_checking_tm_inv = False
+                if tm_updating_now == True:
+                    log.info('tm site inventory update not finished yet')
+            else:
+                log.warn("tm check site inv request error: %s", errstr__tm)
+
 def do_trade_tm_sched():
     if is_have_trade_tm:
         do_trade_tm(do_trade_action)
 
 def do_trade_tm(action):
-    global is_have_trade_tm
+    global is_have_trade_tm, is_updating_tm_inv, tm_errors_count
     if action == 'take' or action == 'give':
         pass 
     else:
@@ -148,8 +197,13 @@ def do_trade_tm(action):
     else:
         return
 
+    if is_updating_tm_inv:
+        log.warn('updating tm site inv, skipping trade attempt')
+        do_update_tm_inv()
+        return
+
     try:
-        tm_response = requests.get(f"https://tf2.tm/api/v2/trade-request-{action}?key={authdata.tm_api}")
+        tm_response = requests.get(f"https://tf2.tm/api/v2/trade-request-{action}/?key={authdata.tm_api}")
     except Exception as e:
         log.error("tm trade request failed: %s", repr(e))
     if tm_response.text.find('<html') >=0 and tm_response.text.find('Engineering works') >=0:
@@ -168,9 +222,6 @@ def do_trade_tm(action):
             while not trade_accepted:
                 try:
                     steam_client.accept_trade_offer(offer_id)
-                    trade_accepted = True
-                    is_have_trade_tm = False
-                    log.info("tradeoffer %s accepted", offer_id)
                 except Exception as e:
                     log.error("error accepting trade offer %s : %s", offer_id, repr(e))
                     if try_amount < 0:
@@ -178,12 +229,20 @@ def do_trade_tm(action):
                         break
                     log.error("retry to accept trade offer %s (attempt %s/%s)", offer_id, 10-try_amount, try_amount)
                     try_amount -= 1
-                    time.sleep(10)
+                else:
+                    trade_accepted = True
+                    is_have_trade_tm = False
+                    tm_errors_count = 0
+                    log.info("tm tradeoffer %s accepted", offer_id)
+                    is_updating_tm_inv = True
+                    log.info('doing update inv after trade')
         else:
             log.warn("tm trade request error: %s", errstr__tm)
             if errstr__tm.find('Мы пытаемся') >= 0 or errstr__tm.find('error: invalid key ') >= 0 or errstr__tm.find('У вас уже есть активные предложения обмена.') >= 0:
-                time.sleep(5)
-                do_trade_tm(action)
+                tm_errors_count += 1
+                if tm_errors_count >= 5:
+                    log.warn('too much tm errors, trying to update inv')
+                    is_updating_tm_inv = True
 
 def check_trade_tm():
     global is_have_trade_tm, do_trade_action
@@ -192,7 +251,7 @@ def check_trade_tm():
         return
 
     try:
-        tm_response = requests.get(f"https://tf2.tm/api/v2/items?key={authdata.tm_api}")
+        tm_response = requests.get(f"https://tf2.tm/api/v2/items/?key={authdata.tm_api}")
     except Exception as e:
         log.error("tm items request failed: %s", repr(e))
     if tm_response.text.find('<html') >=0 and tm_response.text.find('Engineering works') >=0:
@@ -232,8 +291,8 @@ def start_bot():
     schedule.every(30).minutes.do(session_ok)
     schedule.every(185).seconds.do(ping_tm)
     schedule.every(3).minutes.do(check_trade_tm)
-    schedule.every(2).seconds.do(do_trade_tm_sched)
-
+    schedule.every(15).seconds.do(do_trade_tm_sched)
+    schedule.every(15).seconds.do(do_update_tm_inv)
     while True:
         schedule.run_pending()
         time.sleep(1)
