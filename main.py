@@ -243,6 +243,12 @@ def do_trade_tm(action):
                 if tm_errors_count >= 5:
                     log.warn('too much tm errors, trying to update inv')
                     is_updating_tm_inv = True
+            if errstr__tm.find('У вас нет вещей для передачи') >= 0:
+                log.error('cant trade items() to tm, its gone from steam inv')
+                is_have_trade_tm = False
+            if errstr__tm.find('Не удалось получить список предметов') >= 0:
+                log.error('nothing to trade to tm')
+                is_have_trade_tm = False
 
 def check_trade_tm():
     global is_have_trade_tm, do_trade_action
